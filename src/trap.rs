@@ -1,4 +1,3 @@
-
 // trap.rs
 // Trap routines
 // Stephen Marz
@@ -6,20 +5,29 @@
 
 use crate::cpu::TrapFrame;
 use crate::{plic, uart};
+use crate::syscall::do_syscall;
+use crate::sched::schedule;
+
+extern "C" {
+	fn switch_to_user(frame: usize, mepc: usize, satp: usize) -> !;
+}
 
 #[no_mangle]
+/// The m_trap stands for "machine trap". Right now, we are handling
+/// all traps at machine mode. In this mode, we can figure out what's
+/// going on and send a trap where it needs to be. Remember, in machine
+/// mode and in this trap, interrupts are disabled and the MMU is off.
 extern "C" fn m_trap(epc: usize,
                      tval: usize,
                      cause: usize,
                      hart: usize,
                      status: usize,
-                     frame: &mut TrapFrame)
+                     frame: *mut TrapFrame)
                      -> usize
 {
 	// We're going to handle all traps in machine mode. RISC-V lets
 	// us delegate to supervisor mode, but switching out SATP (virtual memory)
 	// gets hairy.
-
 	let is_async = {
 		if cause >> 63 & 1 == 1 {
 			true
@@ -40,12 +48,22 @@ extern "C" fn m_trap(epc: usize,
 				println!("Machine software interrupt CPU#{}", hart);
 			},
 			7 => unsafe {
+				// This is the context-switch timer.
+				// We would typically invoke the scheduler here to pick another
+				// process to run.
 				// Machine timer
+				// println!("CTX");
+				let (frame, mepc, satp) = schedule();
 				let mtimecmp = 0x0200_4000 as *mut u64;
 				let mtime = 0x0200_bff8 as *const u64;
 				// The frequency given by QEMU is 10_000_000 Hz, so this sets
 				// the next interrupt to fire one second from now.
+				// This is much too slow for normal operations, but it gives us
+				// a visual of what's happening behind the scenes.
 				mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
+				unsafe {
+					switch_to_user(frame, mepc, satp);
+				}
 			},
 			11 => {
 				// Machine external (interrupt from Platform Interrupt Controller (PLIC))
@@ -109,16 +127,18 @@ extern "C" fn m_trap(epc: usize,
 			2 => {
 				// Illegal instruction
 				panic!("Illegal instruction CPU#{} -> 0x{:08x}: 0x{:08x}\n", hart, epc, tval);
+				// We need while trues here until we have a functioning "delete from scheduler"
+				while true {}
 			},
 			8 => {
 				// Environment (system) call from User mode
-				println!("E-call from User mode! CPU#{} -> 0x{:08x}", hart, epc);
-				return_pc += 4;
+				// println!("E-call from User mode! CPU#{} -> 0x{:08x}", hart, epc);
+				return_pc = do_syscall(return_pc, frame);
 			},
 			9 => {
 				// Environment (system) call from Supervisor mode
 				println!("E-call from Supervisor mode! CPU#{} -> 0x{:08x}", hart, epc);
-				return_pc += 4;
+				return_pc = do_syscall(return_pc, frame);
 			},
 			11 => {
 				// Environment (system) call from Machine mode
@@ -128,16 +148,22 @@ extern "C" fn m_trap(epc: usize,
 			12 => {
 				// Instruction page fault
 				println!("Instruction page fault CPU#{} -> 0x{:08x}: 0x{:08x}", hart, epc, tval);
+				// We need while trues here until we have a functioning "delete from scheduler"
+				while true {}
 				return_pc += 4;
 			},
 			13 => {
 				// Load page fault
 				println!("Load page fault CPU#{} -> 0x{:08x}: 0x{:08x}", hart, epc, tval);
+				// We need while trues here until we have a functioning "delete from scheduler"
+				while true {}
 				return_pc += 4;
 			},
 			15 => {
 				// Store page fault
 				println!("Store page fault CPU#{} -> 0x{:08x}: 0x{:08x}", hart, epc, tval);
+				// We need while trues here until we have a functioning "delete from scheduler"
+				while true {}
 				return_pc += 4;
 			},
 			_ => {
@@ -148,4 +174,3 @@ extern "C" fn m_trap(epc: usize,
 	// Finally, return the updated program counter
 	return_pc
 }
-
