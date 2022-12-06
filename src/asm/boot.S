@@ -73,7 +73,6 @@ _start:
 	# "machine" trap vector.
 	la		t2, m_trap_vector
 	csrw	mtvec, t2
-	#csrw	satp, a0
 		
 	la		t1, kmain
 	csrw	mepc, t1

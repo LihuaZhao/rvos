@@ -81,7 +81,7 @@ m_trap_vector:
 	csrr	a5, mscratch
 	la		t0, KERNEL_STACK_END
 	ld		sp, 0(t0)
-	# call	m_trap
+	call	m_trap
 
 	# When we get here, we've returned from m_trap, restore registers
 	# and return.
