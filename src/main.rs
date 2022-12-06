@@ -231,13 +231,13 @@ extern "C" fn kinit() {
 	id_map_range(
 	             &mut root,
 	             0x0c00_0000,
-	             0x0c00_2000,
+	             0x0c00_2001,
 	             page::EntryBits::ReadWrite.val(),
 	);
 	id_map_range(
 	             &mut root,
 	             0x0c20_0000,
-	             0x0c20_8000,
+	             0x0c20_8001,
 	             page::EntryBits::ReadWrite.val(),
 	);
 	page::print_page_allocations();
@@ -310,6 +310,28 @@ extern "C" fn kinit() {
 	cpu::satp_fence_asid(0);
 }
 
+#[no_mangle]
+extern "C" fn kinit_hart(hartid: usize) {
+	// All non-0 harts initialize here.
+	unsafe {
+		// We have to store the kernel's table. The tables will be moved
+		// back and forth between the kernel's table and user
+		// applicatons' tables.
+		cpu::mscratch_write(
+		                    (&mut cpu::KERNEL_TRAP_FRAME[hartid]
+		                     as *mut cpu::TrapFrame)
+		                    as usize,
+		);
+		// Copy the same mscratch over to the supervisor version of the
+		// same register.
+		cpu::sscratch_write(cpu::mscratch_read());
+		cpu::KERNEL_TRAP_FRAME[hartid].hartid = hartid;
+		// We can't do the following until zalloc() is locked, but we
+		// don't have locks, yet :( cpu::KERNEL_TRAP_FRAME[hartid].satp
+		// = cpu::KERNEL_TRAP_FRAME[0].satp;
+		// cpu::KERNEL_TRAP_FRAME[hartid].trap_stack = page::zalloc(1);
+	}
+}
 
 #[no_mangle]
 extern "C" fn kmain() {
@@ -319,21 +341,24 @@ extern "C" fn kmain() {
 	// We initialized my_uart in machine mode under kinit for debugging
 	// prints, but this just grabs a pointer to it.
 	let my_uart = uart::Uart::new(0x1000_0000);
-	println!("this is kmain");
 	// Create a new scope so that we can test the global allocator and
 	// deallocator
 	{
 		// We have the global allocator, so let's see if that works!
 		let k = Box::<u32>::new(100);
 		println!("Boxed value = {}", *k);
-		kmem::print_table();
 		// The following comes from the Rust documentation:
 		// some bytes, in a vector
 		let sparkle_heart = vec![240, 159, 146, 150];
 		// We know these bytes are valid, so we'll use `unwrap()`.
+		// This will MOVE the vector.
 		let sparkle_heart = String::from_utf8(sparkle_heart).unwrap();
 		println!("String = {}", sparkle_heart);
+		println!("\n\nAllocations of a box, vector, and string");
+		kmem::print_table();
 	}
+	println!("\n\nEverything should now be free:");
+	kmem::print_table();
 
 	unsafe {
 		// Set the next machine timer to fire.
@@ -348,39 +373,28 @@ extern "C" fn kmain() {
 		let v = 0x0 as *mut u64;
 		v.write_volatile(0);
 	}
-
 	// If we get here, the Box, vec, and String should all be freed since
 	// they go out of scope. This calls their "Drop" trait.
-	// Now see if we can read stuff:
-	// Usually we can use #[test] modules in Rust, but it would convolute
-	// the task at hand, and it requires us to create the testing harness
-	// since the embedded testing system is part of the "std" library.
+
+	// Let's set up the interrupt system via the PLIC. We have to set the threshold to something
+	// that won't mask all interrupts.
+	println!("Setting up interrupts and PLIC...");
+	// We lower the threshold wall so our interrupts can jump over it.
+	plic::set_threshold(0);
+	// VIRTIO = [1..8]
+	// UART0 = 10
+	// PCIE = [32..35]
+	// Enable the UART interrupt.
+	plic::enable(10);
+	plic::set_priority(10, 1);
+	println!("UART interrupts have been enabled and are awaiting your command");
+	
 	loop {
-		if let Some(c) = my_uart.get() {
-			match c {
-				8 => {
-					// This is a backspace, so we
-					// essentially have to write a space and
-					// backup again:
-					print!("{} {}", 8 as char, 8 as char);
-				},
-				10 | 13 => {
-					// Newline or carriage-return
-					println!();
-				},
-				_ => {
-					print!("{}", c as char);
-				},
-			}
-		}
-	}	
+	}
+	
 }
 
-#[no_mangle]
-extern "C" fn kinit_hart(_hartid: usize) {
-	// We aren't going to do anything here until we get SMP going.
-	// All non-0 harts initialize here.
-}
+
 // ///////////////////////////////////
 // / RUST MODULES
 // ///////////////////////////////////
@@ -392,3 +406,4 @@ mod kmem;
 mod page;
 mod uart;
 mod trap;
+mod plic;
