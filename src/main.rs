@@ -335,19 +335,19 @@ extern "C" fn kmain() {
 		println!("String = {}", sparkle_heart);
 	}
 
-unsafe {
-	// Set the next machine timer to fire.
-	let mtimecmp = 0x0200_4000 as *mut u64;
-	let mtime = 0x0200_bff8 as *const u64;
-	// The frequency given by QEMU is 10_000_000 Hz, so this sets
-	// the next interrupt to fire one second from now.
-	mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
+	unsafe {
+		// Set the next machine timer to fire.
+		let mtimecmp = 0x0200_4000 as *mut u64;
+		let mtime = 0x0200_bff8 as *const u64;
+		// The frequency given by QEMU is 10_000_000 Hz, so this sets
+		// the next interrupt to fire one second from now.
+		mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
 
-	// Let's cause a page fault and see what happens. This should trap
-	// to m_trap under trap.rs
-	let v = 0x0 as *mut u64;
-	v.write_volatile(0);
-}
+		// Let's cause a page fault and see what happens. This should trap
+		// to m_trap under trap.rs
+		let v = 0x0 as *mut u64;
+		v.write_volatile(0);
+	}
 
 	// If we get here, the Box, vec, and String should all be freed since
 	// they go out of scope. This calls their "Drop" trait.

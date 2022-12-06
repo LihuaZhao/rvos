@@ -45,7 +45,6 @@ extern "C" fn m_trap(epc: usize,
 				// The frequency given by QEMU is 10_000_000 Hz, so this sets
 				// the next interrupt to fire one second from now.
 				mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
-				println!("Machine mtimer CPU#{}", hart);
 			},
 			11 => {
 				// Machine external (interrupt from Platform Interrupt Controller (PLIC))
