@@ -149,6 +149,53 @@ extern "C" fn kinit() {
 		// the next interrupt to fire one second from now.
 		mtimecmp.write_volatile(mtime.read_volatile() + 1_000_000);
 	}
+	
+
+	// Set up virtio. This requires a working heap and page-grained allocator.
+	virtio::probe();
+	// This just tests the block device. We know that it connects backwards (8, 7, ..., 1).
+	let buffer = kmem::kmalloc(1024);
+	// Offset 1024 is the first block, which is the superblock. In the minix 3 file system, the first
+	// block is the "boot block", which in our case will be 0.
+	block::read(8, buffer, 512, 1024);
+	let mut i = 0;
+	loop {
+		if i > 100_000_000 {
+			break;
+		}
+		i += 1;
+	}
+	println!("Test hdd.dsk:");
+	unsafe {
+		print!("  ");
+		for i in 0..16 {
+			print!("{:02x} ", buffer.add(i).read());
+		}
+		println!();
+		print!("  ");
+		for i in 0..16 {
+			print!("{:02x} ", buffer.add(16+i).read());
+		}
+		println!();
+		print!("  ");
+		for i in 0..16 {
+			print!("{:02x} ", buffer.add(32+i).read());
+		}
+		println!();
+		print!("  ");
+		for i in 0..16 {
+			print!("{:02x} ", buffer.add(48+i).read());
+		}
+		println!();
+		buffer.add(0).write(0xaa);
+		buffer.add(1).write(0xbb);
+		buffer.add(2).write(0x7a);
+
+	}
+	block::write(8, buffer, 512, 0);
+	// Free the testing buffer.
+	kmem::kfree(buffer);
+	
 	let (frame, mepc, satp) = sched::schedule();
 	unsafe {
 		switch_to_user(frame, mepc, satp);
@@ -256,3 +303,6 @@ mod plic;
 mod process;
 mod sched;
 mod syscall;
+mod virtio;
+mod rng;
+mod block;

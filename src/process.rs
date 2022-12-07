@@ -232,6 +232,7 @@ impl Process {
 		map(pt, 0x8000_0000, 0x8000_0000, EntryBits::UserReadExecute.val(), 0);
 		/* lzhao tempory to map make_syscall */
 		map(pt, 0x8000_3000, 0x8000_3000, EntryBits::UserReadExecute.val(), 0);
+		map(pt, 0x8000_4000, 0x8000_4000, EntryBits::UserReadExecute.val(), 0);
 		ret_proc
 	}
 }

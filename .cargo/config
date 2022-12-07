@@ -5,4 +5,4 @@ rustflags = ['-Clink-arg=-Tsrc/lds/virt.lds']
 
 [target.riscv64gc-unknown-none-elf]
 # runner = "/team/LihuaZhao/work/qemu/install/bin/qemu-system-riscv64 -machine virt -cpu rv64,pmp=off -smp 1 -m 128M -nographic -serial mon:stdio -bios none  -kernel "
-runner = "qemu-system-riscv64 -machine virt -cpu rv64,pmp=off -smp 1 -m 128M -nographic -serial mon:stdio -bios none  -kernel "
+runner = "qemu-system-riscv64 -machine virt -cpu rv64,pmp=off -smp 1 -m 128M -nographic -serial mon:stdio  -drive if=none,format=raw,file=hdd.dsk,id=foo -device virtio-blk-device,scsi=off,drive=foo -bios none  -kernel "
