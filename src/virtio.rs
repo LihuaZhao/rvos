@@ -5,11 +5,17 @@
 
 use crate::{block, block::setup_block_device, page::PAGE_SIZE};
 use crate::rng::setup_entropy_device;
+use crate::{gpu, gpu::setup_gpu_device};
+use crate::{input, input::setup_input_device};
 use core::mem::size_of;
 
 // Flags
 // Descriptor flags have VIRTIO_DESC_F as a prefix
 // Available flags have VIRTIO_AVAIL_F
+
+pub const VIRTIO_F_RING_INDIRECT_DESC: u32 = 28;
+pub const VIRTIO_F_RING_EVENT_IDX: u32 = 29;
+pub const VIRTIO_F_VERSION_1: u32 = 32;
 
 pub const VIRTIO_DESC_F_NEXT: u16 = 1;
 pub const VIRTIO_DESC_F_WRITE: u16 = 2;
@@ -96,6 +102,38 @@ pub enum MmioOffsets {
 	Config = 0x100,
 }
 
+// This currently isn't used, but if anyone wants to try their hand at putting a structure
+// to the MMIO address space, you can use the following. Remember that this is volatile!
+#[repr(C)]
+pub struct MmioDevice {
+	magic_value: u32,
+	version: u32,
+	device_id: u32,
+	vendor_id: u32,
+	host_features: u32,
+	host_features_sel: u32,
+	rsv1: [u8; 8],
+	guest_features: u32,
+	guest_features_sel: u32,
+	guest_page_size: u32,
+	rsv2: [u8; 4],
+	queue_sel: u32,
+	queue_num_max: u32,
+	queue_num: u32,
+	queue_align: u32,
+	queue_pfn: u64,
+	rsv3: [u8; 8],
+	queue_notify: u32,
+	rsv4: [u8; 12],
+	interrupt_status: u32,
+	interrupt_ack: u32,
+	rsv5: [u8; 8],
+	status: u32,
+	//rsv6: [u8; 140],
+	//uint32_t config[1];
+	// The config space starts at 0x100, but it is device dependent.
+}
+
 #[repr(usize)]
 pub enum DeviceTypes {
 	None = 0,
@@ -124,6 +162,7 @@ impl MmioOffsets {
 	pub fn scale32(self) -> usize {
 		self.scaled(4)
 	}
+
 }
 
 pub enum StatusField {
@@ -270,6 +309,11 @@ pub fn probe() {
 						println!("setup failed.");
 					}
 					else {
+						let idx = (addr - MMIO_VIRTIO_START) >> 12;
+						unsafe {
+							VIRTIO_DEVICES[idx] =
+								Some(VirtioDevice::new_with(DeviceTypes::Gpu));
+						}
 						println!("setup succeeded!");
 					}
 				},
@@ -280,6 +324,11 @@ pub fn probe() {
 						println!("setup failed.");
 					}
 					else {
+						let idx = (addr - MMIO_VIRTIO_START) >> 12;
+						unsafe {
+							VIRTIO_DEVICES[idx] =
+								Some(VirtioDevice::new_with(DeviceTypes::Input));
+						}
 						println!("setup succeeded!");
 					}
 				},
@@ -290,14 +339,6 @@ pub fn probe() {
 }
 
 pub fn setup_network_device(_ptr: *mut u32) -> bool {
-	false
-}
-
-pub fn setup_gpu_device(_ptr: *mut u32) -> bool {
-	false
-}
-
-pub fn setup_input_device(_ptr: *mut u32) -> bool {
 	false
 }
 
@@ -312,6 +353,12 @@ pub fn handle_interrupt(interrupt: u32) {
 			match vd.devtype {
 				DeviceTypes::Block => {
 					block::handle_interrupt(idx);
+				},
+				DeviceTypes::Gpu => {
+					gpu::handle_interrupt(idx);
+				},
+				DeviceTypes::Input => {
+					input::handle_interrupt(idx);
 				},
 				_ => {
 					println!("Invalid device generated interrupt!");

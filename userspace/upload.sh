@@ -10,10 +10,13 @@ if [ ! -r $1 ]; then
 	exit 2
 fi
 
-
-losetup /dev/loop8 ../hdd.dsk
-mount /dev/loop8 /mnt
-cp $1 /mnt
+rm -f ../hdd.dsk
+fallocate -l 32M ../hdd.dsk
+chmod 777 ../hdd.dsk
+sudo losetup /dev/loop8 ../hdd.dsk
+sudo mkfs.minix -3 /dev/loop8
+sudo mount /dev/loop8 /mnt
+sudo cp $1 /mnt
 stat /mnt/helloworld.elf
-umount /dev/loop8
-losetup -d /dev/loop8
+sudo umount /dev/loop8
+sudo losetup -d /dev/loop8

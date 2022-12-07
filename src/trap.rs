@@ -3,14 +3,12 @@
 // Stephen Marz
 // 10 October 2019
 
-use crate::cpu::TrapFrame;
-use crate::{plic, uart};
-use crate::syscall::do_syscall;
-use crate::sched::schedule;
-
-extern "C" {
-	fn switch_to_user(frame: usize, mepc: usize, satp: usize) -> !;
-}
+use crate::{cpu::{TrapFrame, CONTEXT_SWITCH_TIME},
+            plic,
+            process::delete_process,
+            rust_switch_to_user,
+            sched::schedule,
+            syscall::do_syscall};
 
 #[no_mangle]
 /// The m_trap stands for "machine trap". Right now, we are handling
@@ -21,7 +19,7 @@ extern "C" fn m_trap(epc: usize,
                      tval: usize,
                      cause: usize,
                      hart: usize,
-                     status: usize,
+                     _status: usize,
                      frame: *mut TrapFrame)
                      -> usize
 {
@@ -44,27 +42,21 @@ extern "C" fn m_trap(epc: usize,
 		// Asynchronous trap
 		match cause_num {
 			3 => {
-				// Machine software
-				println!("Machine software interrupt CPU#{}", hart);
-			},
-			7 => unsafe {
+				// We will use this to awaken our other CPUs so they can process
+				// processes.
+				println!("Machine software interrupt CPU #{}", hart);
+			}
+			7 => {
 				// This is the context-switch timer.
 				// We would typically invoke the scheduler here to pick another
 				// process to run.
 				// Machine timer
-				// println!("CTX");
-				let (frame, mepc, satp) = schedule();
-				let mtimecmp = 0x0200_4000 as *mut u64;
-				let mtime = 0x0200_bff8 as *const u64;
-				// The frequency given by QEMU is 10_000_000 Hz, so this sets
-				// the next interrupt to fire one second from now.
-				// This is much too slow for normal operations, but it gives us
-				// a visual of what's happening behind the scenes.
-				mtimecmp.write_volatile(mtime.read_volatile() + 10_000_000);
-				unsafe {
-					switch_to_user(frame, mepc, satp);
+				let new_frame = schedule();
+				schedule_next_context_switch(1);
+				if new_frame != 0 {
+					rust_switch_to_user(new_frame);
 				}
-			},
+			}
 			11 => {
 				// Machine external (interrupt from Platform Interrupt Controller (PLIC))
 				// println!("Machine external interrupt CPU#{}", hart);
@@ -72,50 +64,8 @@ extern "C" fn m_trap(epc: usize,
 				// give us None. However, that would mean we got a spurious interrupt, unless we
 				// get an interrupt from a non-PLIC source. This is the main reason that the PLIC
 				// hardwires the id 0 to 0, so that we can use it as an error case.
-				if let Some(interrupt) = plic::next() {
-					// If we get here, we've got an interrupt from the claim register. The PLIC will
-					// automatically prioritize the next interrupt, so when we get it from claim, it
-					// will be the next in priority order.
-					match interrupt {
-						10 => { // Interrupt 10 is the UART interrupt.
-							// We would typically set this to be handled out of the interrupt context,
-							// but we're testing here! C'mon!
-							// We haven't yet used the singleton pattern for my_uart, but remember, this
-							// just simply wraps 0x1000_0000 (UART).
-							let mut my_uart = uart::Uart::new(0x1000_0000);
-							// If we get here, the UART better have something! If not, what happened??
-							if let Some(c) = my_uart.get() {
-								// If you recognize this code, it used to be in the lib.rs under kmain(). That
-								// was because we needed to poll for UART data. Now that we have interrupts,
-								// here it goes!
-								match c {
-									8 => {
-										// This is a backspace, so we
-										// essentially have to write a space and
-										// backup again:
-										print!("{} {}", 8 as char, 8 as char);
-									},
-									10 | 13 => {
-										// Newline or carriage-return
-										println!();
-									},
-									_ => {
-										print!("{}", c as char);
-									},
-								}
-							}
-					
-						},
-						// Non-UART interrupts go here and do nothing.
-						_ => {
-							println!("Non-UART external interrupt: {}", interrupt);
-						}
-					}
-					// We've claimed it, so now say that we've handled it. This resets the interrupt pending
-					// and allows the UART to interrupt again. Otherwise, the UART will get "stuck".
-					plic::complete(interrupt);
-				}
-			},
+				plic::handle_interrupt();
+			}
 			_ => {
 				panic!("Unhandled async trap CPU#{} -> {}\n", hart, cause_num);
 			}
@@ -124,53 +74,80 @@ extern "C" fn m_trap(epc: usize,
 	else {
 		// Synchronous trap
 		match cause_num {
-			2 => {
+			2 => unsafe {
 				// Illegal instruction
-				panic!("Illegal instruction CPU#{} -> 0x{:08x}: 0x{:08x}\n", hart, epc, tval);
+				println!("Illegal instruction CPU#{} -> 0x{:08x}: 0x{:08x}\n", hart, epc, tval);
 				// We need while trues here until we have a functioning "delete from scheduler"
-				while true {}
-			},
-			8 => {
-				// Environment (system) call from User mode
+				// I use while true because Rust will warn us that it looks stupid.
+				// This is what I want so that I remember to remove this and replace
+				// them later.
+				delete_process((*frame).pid as u16);
+				let frame = schedule();
+				schedule_next_context_switch(1);
+				rust_switch_to_user(frame);
+			}
+			3 => {
+				// breakpoint
+				println!("BKPT\n\n");
+				return_pc += 2;
+			}
+			7 => unsafe {
+				println!("Error with pid {}, at PC 0x{:08x}, mepc 0x{:08x}", (*frame).pid, (*frame).pc, epc);
+				delete_process((*frame).pid as u16);
+				let frame = schedule();
+				schedule_next_context_switch(1);
+				rust_switch_to_user(frame);
+			}
+			8 | 9 | 11 => unsafe {
+				// Environment (system) call from User, Supervisor, and Machine modes
 				// println!("E-call from User mode! CPU#{} -> 0x{:08x}", hart, epc);
-				return_pc = do_syscall(return_pc, frame);
-			},
-			9 => {
-				// Environment (system) call from Supervisor mode
-				println!("E-call from Supervisor mode! CPU#{} -> 0x{:08x}", hart, epc);
-				return_pc = do_syscall(return_pc, frame);
-			},
-			11 => {
-				// Environment (system) call from Machine mode
-				panic!("E-call from Machine mode! CPU#{} -> 0x{:08x}\n", hart, epc);
-			},
+				do_syscall(return_pc, frame);
+				let frame = schedule();
+				schedule_next_context_switch(1);
+				rust_switch_to_user(frame);
+			}
 			// Page faults
-			12 => {
+			12 => unsafe {
 				// Instruction page fault
 				println!("Instruction page fault CPU#{} -> 0x{:08x}: 0x{:08x}", hart, epc, tval);
-				// We need while trues here until we have a functioning "delete from scheduler"
-				while true {}
-				return_pc += 4;
-			},
-			13 => {
+				delete_process((*frame).pid as u16);
+				let frame = schedule();
+				schedule_next_context_switch(1);
+				rust_switch_to_user(frame);
+			}
+			13 => unsafe {
 				// Load page fault
 				println!("Load page fault CPU#{} -> 0x{:08x}: 0x{:08x}", hart, epc, tval);
-				// We need while trues here until we have a functioning "delete from scheduler"
-				while true {}
-				return_pc += 4;
-			},
-			15 => {
+				delete_process((*frame).pid as u16);
+				let frame = schedule();
+				schedule_next_context_switch(1);
+				rust_switch_to_user(frame);
+			}
+			15 => unsafe {
 				// Store page fault
 				println!("Store page fault CPU#{} -> 0x{:08x}: 0x{:08x}", hart, epc, tval);
-				// We need while trues here until we have a functioning "delete from scheduler"
-				while true {}
-				return_pc += 4;
-			},
+				delete_process((*frame).pid as u16);
+				let frame = schedule();
+				schedule_next_context_switch(1);
+				rust_switch_to_user(frame);
+			}
 			_ => {
-				panic!("Unhandled sync trap CPU#{} -> {}\n", hart, cause_num);
+				panic!(
+				       "Unhandled sync trap {}. CPU#{} -> 0x{:08x}: 0x{:08x}\n",
+				       cause_num, hart, epc, tval
+				);
 			}
 		}
 	};
 	// Finally, return the updated program counter
 	return_pc
+}
+
+pub const MMIO_MTIMECMP: *mut u64 = 0x0200_4000usize as *mut u64;
+pub const MMIO_MTIME: *const u64 = 0x0200_BFF8 as *const u64;
+
+pub fn schedule_next_context_switch(qm: u16) {
+	unsafe {
+		MMIO_MTIMECMP.write_volatile(MMIO_MTIME.read_volatile().wrapping_add(CONTEXT_SWITCH_TIME * qm as u64));
+	}
 }
