@@ -147,7 +147,7 @@ impl File {
 		let program_pages = (sz + PAGE_SIZE * 2) / PAGE_SIZE;
 		// I did this to demonstrate the expressive nature of Rust. Kinda cool, no?
 		let my_pid = unsafe {
-			let p = NEXT_PID + 1;
+			let p = NEXT_PID;
 			NEXT_PID += 1;
 			p
 		};

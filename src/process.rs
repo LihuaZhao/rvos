@@ -224,6 +224,7 @@ pub fn add_kernel_process(func: fn()) -> u16 {
 			ret_proc.stack as usize + STACK_PAGES * 4096;
 		(*ret_proc.frame).mode = CpuMode::Machine as usize;
 		(*ret_proc.frame).pid = ret_proc.pid as usize;
+		(*ret_proc.frame).satp = 0;
 	}
 
 	if let Some(mut pl) = unsafe { PROCESS_LIST.take() } {
